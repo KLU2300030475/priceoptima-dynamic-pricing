@@ -16,19 +16,12 @@ st.title("💰 PriceOptima - Dynamic Pricing System")
 st.markdown("### Intelligent Price Recommendation Dashboard")
 
 # -----------------------------
-# SIDEBAR (ADVANCED INPUTS)
+# SIDEBAR
 # -----------------------------
 st.sidebar.header("⚙️ Advanced Settings")
 
-base_price = st.sidebar.number_input("Base Price", value=100.0)
 competitor_price = st.sidebar.number_input("Competitor Price", value=95.0)
 discount = st.sidebar.number_input("Discount (%)", value=5.0)
-
-year = st.sidebar.number_input("Year", value=2024)
-month = st.sidebar.number_input("Month", 1, 12, value=1)
-day = st.sidebar.number_input("Day", 1, 31, value=1)
-hour = st.sidebar.number_input("Hour", 0, 23, value=12)
-
 weekend_flag = st.sidebar.selectbox("Weekend?", [0, 1])
 holiday_flag = st.sidebar.selectbox("Holiday?", [0, 1])
 
@@ -43,18 +36,30 @@ with col1:
 with col2:
     inventory = st.number_input("Inventory Level", min_value=0, value=50)
 
-price_diff = price - competitor_price
-
+# -----------------------------
+# AUTO MODE
+# -----------------------------
 auto_mode = st.checkbox("⚡ Auto Mode (Recommended)")
 
 if auto_mode:
-    base_price = price
     competitor_price = price * 0.95
-    discount = 5
+    discount = 5.0
     weekend_flag = 0
     holiday_flag = 0
+
+price_diff = price - competitor_price
+
 # -----------------------------
-# LOAD PIPELINE
+# DEFAULT VALUES
+# -----------------------------
+base_price = price
+year = 2024
+month = 1
+day = 1
+hour = 12
+
+# -----------------------------
+# LOAD MODEL
 # -----------------------------
 try:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -71,6 +76,9 @@ except:
 if st.button("🚀 Get Recommendation"):
 
     if pipeline_loaded:
+        # -----------------------------
+        # ORIGINAL DEMAND
+        # -----------------------------
         input_df = pd.DataFrame([{
             "price": price,
             "base_price": base_price,
@@ -88,12 +96,42 @@ if st.button("🚀 Get Recommendation"):
 
         demand = pipeline.predict(input_df)[0]
 
-        from pricing_engine import get_optimal_price
-        recommended_price = get_optimal_price(price, demand)
+        # -----------------------------
+        # SMART PRICE ADJUSTMENT
+        # -----------------------------
+        # Dynamic logic based on demand
+        if demand > 60:
+            recommended_price = price * 1.10
+        elif demand > 40:
+            recommended_price = price * 1.05
+        else:
+            recommended_price = price * 0.95
 
-        old_revenue = price * demand
-        new_revenue = recommended_price * demand
-        improvement = ((new_revenue - old_revenue) / old_revenue) * 100
+        # -----------------------------
+        # RE-CALCULATE DEMAND (IMPORTANT FIX)
+        # -----------------------------
+        new_input_df = input_df.copy()
+        new_input_df["price"] = recommended_price
+        new_input_df["price_diff"] = recommended_price - competitor_price
+
+        new_demand = pipeline.predict(new_input_df)[0]
+
+        # 🔥 ADJUST DEMAND BASED ON PRICE CHANGE
+        price_change_ratio = (recommended_price - price) / price
+
+        new_demand = new_demand * (1 - 0.5 * price_change_ratio)
+
+        # -----------------------------
+        # REVENUE CALCULATIONS
+        # -----------------------------
+        static_price = price
+        rule_price = competitor_price * (1 - discount / 100)
+
+        static_revenue = static_price * demand
+        rule_revenue = rule_price * demand
+        ml_revenue = recommended_price * new_demand
+
+        improvement = ((ml_revenue - static_revenue) / static_revenue) * 100
 
         # -----------------------------
         # KPI CARDS
@@ -102,16 +140,55 @@ if st.button("🚀 Get Recommendation"):
 
         k1, k2, k3 = st.columns(3)
 
-        k1.metric("Demand", f"{demand:.2f}")
+        k1.metric("Demand", f"{new_demand:.2f}")
         k2.metric("Recommended Price", f"{recommended_price:.2f}")
         k3.metric("Revenue Improvement", f"{improvement:.2f}%")
 
         # -----------------------------
-        # GRAPH
+        # PRICE COMPARISON
+        # -----------------------------
+        st.subheader("📊 Pricing Comparison")
+
+        c1, c2, c3 = st.columns(3)
+
+        c1.metric("Original Price", f"{price:.2f}")
+        c2.metric("Rule-Based Price", f"{rule_price:.2f}")
+        c3.metric("ML Price", f"{recommended_price:.2f}")
+
+        # -----------------------------
+        # REVENUE GRAPH
         # -----------------------------
         st.subheader("📈 Revenue Comparison")
 
         fig, ax = plt.subplots()
-        ax.bar(["Old", "New"], [old_revenue, new_revenue])
+
+        labels = ["Static", "Rule-Based", "ML-Based"]
+        values = [static_revenue, rule_revenue, ml_revenue]
+
+        ax.bar(labels, values)
+        ax.set_ylabel("Revenue")
 
         st.pyplot(fig)
+
+        st.write(f"ML Revenue: {ml_revenue:.2f}")
+        ax.set_title("Revenue Comparison")
+        # -----------------------------
+        # BUSINESS INSIGHT
+        # -----------------------------
+        st.subheader("📌 Business Insight")
+
+        if recommended_price > price:
+            st.success("Increase price → High demand expected 📈")
+        else:
+            st.warning("Decrease price → Boost sales 📉")
+
+        # -----------------------------
+        # EXPLANATION
+        # -----------------------------
+        st.info("""
+💡 This system:
+- Predicts demand using Machine Learning
+- Adjusts price dynamically based on demand
+- Recalculates demand after price change
+- Shows real revenue improvement
+""")
